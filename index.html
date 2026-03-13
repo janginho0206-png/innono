@@ -354,15 +354,17 @@ let uid = 1;
 
 // ── SESSION 저장/복원 ──────────────────────────────────────────────────
 function saveSessions() {
-  // stepPauseStart가 있으면(일시정지 중) 누적 pauseMs에 반영해서 저장
+  const now = Date.now();
   const toSave = sessions.map(s => {
     const copy = JSON.parse(JSON.stringify(s));
-    // 진행 중인 단계가 있고 일시정지 중이면 현재까지 pauseMs 반영
-    if(copy.stepPauseStart) {
-      const idx = copy.activeStepIdx;
-      if(idx !== null) copy.steps[idx].pauseMs += Date.now() - copy.stepPauseStart;
-      copy.stepPauseStart = null; // 저장 시엔 null로
+    const idx = copy.activeStepIdx;
+    if(idx !== null && copy.stepPauseStart) {
+      // 정지 중이든 running 중이든 pauseMs에 현재까지 누적 반영 후 초기화
+      copy.steps[idx].pauseMs += now - copy.stepPauseStart;
+      copy.stepPauseStart = null;
     }
+    // 정지 상태로 저장할 때 저장 시점 기록 (복원 시 정지 시간 계속 누적용)
+    copy._pausedSavedAt = (s.state === 'paused' && idx !== null) ? now : null;
     return copy;
   });
   localStorage.setItem('sessions4', JSON.stringify(toSave));
@@ -375,9 +377,23 @@ function loadSessions() {
   try {
     const loaded = JSON.parse(raw);
     uid = parseInt(localStorage.getItem('uid4')||'1');
-    // 복원: running 상태였던 세션은 그대로 running으로 (타이머는 startTime 기준으로 계산)
-    sessions = loaded.filter(s => s.state !== 'done');
-    // running이었던 단계 복원 — stepPauseStart는 null이므로 pauseMs는 이미 반영된 상태
+    sessions = loaded.filter(s => s.state !== 'done').map(s => {
+      const now = Date.now();
+      const idx = s.activeStepIdx;
+      if(idx !== null) {
+        if(s.state === 'paused') {
+          // 정지 상태 복원: stepPauseStart를 now로 설정해서 이후 정지 시간 계속 누적
+          s.stepPauseStart = now;
+          s.steps[idx].state = 'paused';
+        } else if(s.state === 'running') {
+          // running 복원: 앱 나간 시간은 startTime 기준으로 자동 포함됨
+          s.stepPauseStart = null;
+          s.steps[idx].state = 'running';
+        }
+      }
+      s._pausedSavedAt = null;
+      return s;
+    });
     renderSessions();
     if(sessions.length > 0) showToast(`🔄 진행 중인 작업 ${sessions.length}개 복원됨`);
   } catch(e) { sessions = []; }
