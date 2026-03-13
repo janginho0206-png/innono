@@ -352,15 +352,51 @@ let records   = JSON.parse(localStorage.getItem('rec4')||'[]');
 let sessions = [];
 let uid = 1;
 
+// ── SESSION 저장/복원 ──────────────────────────────────────────────────
+function saveSessions() {
+  // stepPauseStart가 있으면(일시정지 중) 누적 pauseMs에 반영해서 저장
+  const toSave = sessions.map(s => {
+    const copy = JSON.parse(JSON.stringify(s));
+    // 진행 중인 단계가 있고 일시정지 중이면 현재까지 pauseMs 반영
+    if(copy.stepPauseStart) {
+      const idx = copy.activeStepIdx;
+      if(idx !== null) copy.steps[idx].pauseMs += Date.now() - copy.stepPauseStart;
+      copy.stepPauseStart = null; // 저장 시엔 null로
+    }
+    return copy;
+  });
+  localStorage.setItem('sessions4', JSON.stringify(toSave));
+  localStorage.setItem('uid4', String(uid));
+}
+
+function loadSessions() {
+  const raw = localStorage.getItem('sessions4');
+  if(!raw) return;
+  try {
+    const loaded = JSON.parse(raw);
+    uid = parseInt(localStorage.getItem('uid4')||'1');
+    // 복원: running 상태였던 세션은 그대로 running으로 (타이머는 startTime 기준으로 계산)
+    sessions = loaded.filter(s => s.state !== 'done');
+    // running이었던 단계 복원 — stepPauseStart는 null이므로 pauseMs는 이미 반영된 상태
+    renderSessions();
+    if(sessions.length > 0) showToast(`🔄 진행 중인 작업 ${sessions.length}개 복원됨`);
+  } catch(e) { sessions = []; }
+}
+
 // ── INIT ───────────────────────────────────────────────────────────────
 function init() {
   document.getElementById('dateBar').textContent =
     new Date().toLocaleDateString('ko-KR',{year:'numeric',month:'long',day:'numeric',weekday:'short'});
   renderStepNames();
+  loadSessions();
   setInterval(() => {
     document.getElementById('hClock').textContent = new Date().toTimeString().slice(0,8);
     tickAll();
+    saveSessions(); // 매 초마다 자동 저장
   }, 1000);
+  // 페이지 종료/숨김 시에도 저장
+  document.addEventListener('visibilitychange', () => { if(document.hidden) saveSessions(); });
+  window.addEventListener('pagehide', saveSessions);
 }
 
 // ── TABS ───────────────────────────────────────────────────────────────
@@ -520,6 +556,7 @@ function confirmSession() {
   sessions.push(sess);
   closeModal();
   renderSessions();
+  saveSessions();
   showToast(`🏭 ${fullName} 추가됨`);
 }
 
@@ -543,6 +580,7 @@ function startStep(sessId, stepIdx) {
   s.state = 'running';
   s.stepPauseStart = null;
   renderSessCard(s);
+  saveSessions();
   showToast(`▶ STEP ${stepIdx+1} 시작`);
 }
 
@@ -553,6 +591,7 @@ function pauseCurrentStep(sessId) {
   st.state = 'paused';
   s.state = 'paused';
   renderSessCard(s);
+  saveSessions();
   showToast('⏸ 일시정지');
 }
 
@@ -563,6 +602,7 @@ function resumeCurrentStep(sessId) {
   st.state = 'running';
   s.state = 'running';
   renderSessCard(s);
+  saveSessions();
   showToast('▶ 재개');
 }
 
@@ -570,6 +610,7 @@ function stopCurrentStep(sessId) {
   const s = sessions.find(x=>x.id===sessId); if(!s||s.activeStepIdx===null) return;
   finishCurrentStep(s);
   renderSessCard(s);
+  saveSessions();
   showToast(`✅ STEP ${s.activeStepIdx===null ? '?' : ''} 완료`);
 }
 
@@ -581,11 +622,11 @@ function finishCurrentStep(s) {
   st.endTime = now;
   st.activeMs = Math.max(0, now - st.startTime - st.pauseMs);
   st.state = 'done';
-  // grab note from textarea if visible
   const noteEl = document.getElementById(`note-${s.id}`);
   if(noteEl) st.note = noteEl.value.trim();
   s.activeStepIdx = null;
   s.state = s.steps.some(st=>st.state==='running'||st.state==='paused') ? 'running' : 'idle';
+  saveSessions();
   showToast(`✅ STEP ${idx+1} 완료`);
 }
 
@@ -615,11 +656,12 @@ function finalizeSess(sessId) {
   localStorage.setItem('rec4', JSON.stringify(records));
   s.state = 'done';
   renderSessCard(s);
+  saveSessions();
   showToast(`✅ ${s.equipName} 저장 완료! 총 ${fmtMs(totalActive)}`);
-  setTimeout(()=>{ sessions=sessions.filter(x=>x.id!==sessId); renderSessions(); }, 2600);
+  setTimeout(()=>{ sessions=sessions.filter(x=>x.id!==sessId); renderSessions(); saveSessions(); }, 2600);
 }
 
-function removeSess(id) { sessions=sessions.filter(x=>x.id!==id); renderSessions(); }
+function removeSess(id) { sessions=sessions.filter(x=>x.id!==id); renderSessions(); saveSessions(); }
 function toggleExpand(id) {
   const s=sessions.find(x=>x.id===id); if(!s) return;
   s.expanded=!s.expanded; renderSessCard(s);
